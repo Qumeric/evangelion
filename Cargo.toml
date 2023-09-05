@@ -4,8 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anyhow = "1.0.75"
+dashmap =" 5.5.3"
 ethers = "2.0.8"
+flate2 = "1.0.27"
 futures-util = "0.3.28"
+reqwest = { version = "0.11.20", features = ["blocking"] }
 reth-interfaces = { git = "https://github.com/paradigmxyz/reth.git", package = "reth-interfaces", version = "0.1.0-alpha.8" }
 reth-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", package = "reth-payload-builder", version = "0.1.0-alpha.8" }
 reth-primitives = { git = "https://github.com/paradigmxyz/reth.git", package = "reth-primitives", version = "0.1.0-alpha.8" }
@@ -13,9 +17,17 @@ reth-provider = { git = "https://github.com/paradigmxyz/reth.git", package = "re
 reth-revm = { git = "https://github.com/paradigmxyz/reth.git", package = "reth-revm", version = "0.1.0-alpha.8" }
 reth-revm-primitives = { git = "https://github.com/paradigmxyz/reth.git", package = "reth-revm-primitives", version = "0.1.0-alpha.8" }
 reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth.git", package = "reth-transaction-pool", version = "0.1.0-alpha.8" }
-tokio = "1.29.1"
+serde = "1.0.188"
+serde_json = "1.0.105"
+tokio = "1.32.0"
 tokio-stream = { version = "0.1.14", features = ["sync"] }
 tokio-util = { version = "0.7.8", features = ["time"] }
+mev-rs = { git = "https://github.com/ralexstokes/mev-rs", package = "mev-rs" }
+ethereum-consensus = { git = "https://github.com/ralexstokes/ethereum-consensus.git", package = "ethereum-consensus" }
+tracing = "0.1.37"
+ruint = "1.10.1"
+hex = "0.4.3"
+
 
 [patch.crates-io]
 revm = { git = "https://github.com/bluealloy/revm/", branch = "release/v25" }
