@@ -1,16 +1,19 @@
-use std::{collections::{HashMap, HashSet}, time::Duration, error::Error, ops::Add, io::Write};
-use anyhow::{Result, Context};
+use crate::config::get_relay_urls;
+use crate::types::as_string;
+use anyhow::{Context, Result};
 use flate2::{write::GzEncoder, Compression};
 use mev_rs::types::SignedBidSubmission;
 use reqwest::header;
-use reth_primitives::{Address, hex};
-use serde::{Deserialize, Serialize, Deserializer};
+use reth_primitives::{hex, Address};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::{HashMap, HashSet},
+    error::Error,
+    io::Write,
+    ops::Add,
+    time::Duration,
+};
 use tokio::time::sleep;
-use crate::types::{as_string};
-use crate::config::get_relay_urls;
-
-
-
 
 // TODO only deserialze?
 #[derive(Deserialize, Serialize, Debug)]
@@ -45,26 +48,35 @@ pub struct SendBlockStatus {
 }
 
 pub struct RelayEndpoint {
-  name: String,
-  url: String,
-  client: reqwest::blocking::Client,
-  is_gzip_enabled: bool,
-  autorization_header: Option<String>,
-  blacklist: HashSet<Address>,
+    name: String,
+    url: String,
+    client: reqwest::blocking::Client,
+    is_gzip_enabled: bool,
+    autorization_header: Option<String>,
+    blacklist: HashSet<Address>,
 }
 
 impl RelayEndpoint {
     pub fn get_validators(&self) -> Result<Vec<Validator>, Box<dyn Error>> {
         let endpoint = format!("{}/relay/v1/builder/validators", self.url);
-        let response: Vec<Validator> = self.client.get(endpoint).send()?.json().context("get validators request")?;
+        let response: Vec<Validator> = self
+            .client
+            .get(endpoint)
+            .send()?
+            .json()
+            .context("get validators request")?;
         Ok(response)
     }
 
-    pub fn post_block(&self, block: &SignedBidSubmission) -> Result<SendBlockStatus, Box<dyn Error>> {
+    pub fn post_block(
+        &self,
+        block: &SignedBidSubmission,
+    ) -> Result<SendBlockStatus, Box<dyn Error>> {
         let endpoint = format!("{}/relay/v1/builder/blocks", self.url);
         let (body, encoding) = self.encode(&block)?;
 
-        let mut req_builder = self.client
+        let mut req_builder = self
+            .client
             .post(endpoint)
             .header(header::CONTENT_TYPE, "application/json")
             .body(body);
@@ -76,15 +88,14 @@ impl RelayEndpoint {
         if let Some(auth) = &self.autorization_header {
             req_builder = req_builder.header(header::AUTHORIZATION, auth);
         }
-        
+
         let response: SendBlockStatus = req_builder.send()?.json().context("send block request")?;
 
         Ok(response)
     }
 
-    
-    fn encode(&self, block: &SignedBidSubmission) -> Result<(Vec<u8>, Option<&str>)> {
-        let payload = serde_json::to_vec(block).context("marshal block json")?;
+    fn encode(&self, bid: &SignedBidSubmission) -> Result<(Vec<u8>, Option<&str>)> {
+        let payload = serde_json::to_vec(bid).context("marshal block json")?;
 
         if self.is_gzip_enabled {
             let mut compressed_buffer = Vec::new();
@@ -96,16 +107,12 @@ impl RelayEndpoint {
             Ok((payload, None))
         }
     }
-
-    fn package(&self, block: Block) {
-
-    }
 }
-
-
 
 #[cfg(test)]
 mod tests {
+    use mev_rs::types::SignedBidSubmission;
+
     use crate::mev_boost_relay_json::SEND_BLOCK_REQUEST_EXAMPLE_JSON;
 
     use super::*;
@@ -125,16 +132,16 @@ mod tests {
     fn test_get_validator_relay_response() -> Result<(), Box<dyn Error>> {
         let endpoint = setup_endpoint();
         let response: Vec<Validator> = endpoint.get_validators().unwrap();
-        
+
         // Now `response` is a Vec<GetValidatorRelayResponse>
         println!("{:#?}", response);
-        
+
         Ok(())
     }
 
     #[test]
     fn test_send_invalid_block() -> Result<(), Box<dyn Error>> {
-        let endpoint = setup_endpoint();        
+        let endpoint = setup_endpoint();
 
         let bid: SignedBidSubmission = serde_json::from_str(SEND_BLOCK_REQUEST_EXAMPLE_JSON)?;
         let response = endpoint.post_block(&bid);
@@ -147,11 +154,11 @@ mod tests {
         match response {
             Ok(response_body) => {
                 println!("{:#?}", response_body);
-                assert_eq!(response_body, expected_response);        
-            },
+                assert_eq!(response_body, expected_response);
+            }
             Err(e) => panic!("{}", e),
         }
 
-        Ok(())        
+        Ok(())
     }
 }
