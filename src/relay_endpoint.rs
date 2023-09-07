@@ -1,10 +1,11 @@
-use crate::config::get_relay_urls;
 use crate::types::as_string;
+use crate::types::SignedBidSubmission;
 use anyhow::{Context, Result};
+use ethereum_consensus::primitives::BlsPublicKey;
 use flate2::{write::GzEncoder, Compression};
-use mev_rs::types::SignedBidSubmission;
 use reqwest::header;
 use reth_primitives::{hex, Address};
+use ruint::aliases::B384;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -15,6 +16,8 @@ use std::{
 };
 use tokio::time::sleep;
 
+type PublicKey = B384;
+
 // TODO only deserialze?
 #[derive(Deserialize, Serialize, Debug)]
 pub struct EntryMessage {
@@ -23,7 +26,7 @@ pub struct EntryMessage {
     pub gas_limit: u64,
     #[serde(with = "as_string")]
     pub timestamp: u64,
-    pub pubkey: String,
+    pub pubkey: PublicKey,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -53,11 +56,25 @@ pub struct RelayEndpoint {
     client: reqwest::blocking::Client,
     is_gzip_enabled: bool,
     autorization_header: Option<String>,
-    blacklist: HashSet<Address>,
+    //tags: Vec<String>, // TODO support blacklist etc.
 }
 
 impl RelayEndpoint {
-    pub fn get_validators(&self) -> Result<Vec<Validator>, Box<dyn Error>> {
+    pub fn new(
+        name: &str,
+        url: &str,
+        is_gzip_enabled: bool,
+        autorization_header: Option<String>,
+    ) -> Self {
+        RelayEndpoint {
+            name: name.to_string(),
+            url: url.to_string(),
+            client: reqwest::blocking::Client::new(),
+            is_gzip_enabled,
+            autorization_header,
+        }
+    }
+    pub fn get_validators(&self) -> Result<Vec<Validator>> {
         let endpoint = format!("{}/relay/v1/builder/validators", self.url);
         let response: Vec<Validator> = self
             .client
@@ -68,10 +85,7 @@ impl RelayEndpoint {
         Ok(response)
     }
 
-    pub fn post_block(
-        &self,
-        block: &SignedBidSubmission,
-    ) -> Result<SendBlockStatus, Box<dyn Error>> {
+    pub fn post_block(&self, block: &SignedBidSubmission) -> Result<SendBlockStatus> {
         let endpoint = format!("{}/relay/v1/builder/blocks", self.url);
         let (body, encoding) = self.encode(&block)?;
 
@@ -111,21 +125,12 @@ impl RelayEndpoint {
 
 #[cfg(test)]
 mod tests {
-    use mev_rs::types::SignedBidSubmission;
-
     use crate::mev_boost_relay_json::SEND_BLOCK_REQUEST_EXAMPLE_JSON;
 
     use super::*;
 
     fn setup_endpoint() -> RelayEndpoint {
-        RelayEndpoint {
-            name: "ultrasound".to_string(),
-            url: "https://relay.ultrasound.money".to_string(),
-            client: reqwest::blocking::Client::new(),
-            is_gzip_enabled: false,
-            autorization_header: None,
-            blacklist: HashSet::new(),
-        }
+        RelayEndpoint::new("ultrasound", "https://relay.ultrasound.money", false, None)
     }
 
     #[test]

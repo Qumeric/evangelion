@@ -42,8 +42,9 @@ pub const GET_VALIDATORS_JSON: &str = r#"
 ]
 "#;
 
+// TODO: validatorIndex is hack, reth for some reason has rename = ...
 // TODO: propser_pubkey was not in relay api example somehow?
-pub const SEND_BLOCK_REQUEST_EXAMPLE_JSON : &str = r#"
+pub const SEND_BLOCK_REQUEST_EXAMPLE_JSON: &str = r#"
 {
   "message": {
     "slot": "1",

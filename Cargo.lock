@@ -2268,6 +2268,7 @@ dependencies = [
  "reth-provider",
  "reth-revm",
  "reth-revm-primitives",
+ "reth-rlp",
  "reth-transaction-pool",
  "ruint",
  "serde",

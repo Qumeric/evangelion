@@ -14,6 +14,7 @@ reth-interfaces = { git = "https://github.com/paradigmxyz/reth.git", package = "
 reth-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", package = "reth-payload-builder", version = "0.1.0-alpha.8" }
 reth-primitives = { git = "https://github.com/paradigmxyz/reth.git", package = "reth-primitives", version = "0.1.0-alpha.8" }
 reth-provider = { git = "https://github.com/paradigmxyz/reth.git", package = "reth-provider", version = "0.1.0-alpha.8" }
+reth-rlp = { git = "https://github.com/paradigmxyz/reth.git", package = "reth-rlp", version = "0.1.0-alpha.8" }
 reth-revm = { git = "https://github.com/paradigmxyz/reth.git", package = "reth-revm", version = "0.1.0-alpha.8" }
 reth-revm-primitives = { git = "https://github.com/paradigmxyz/reth.git", package = "reth-revm-primitives", version = "0.1.0-alpha.8" }
 reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth.git", package = "reth-transaction-pool", version = "0.1.0-alpha.8" }

@@ -1,37 +1,18 @@
 use crate::relay_endpoint::{RelayEndpoint, Validator};
 use crate::signing::sign_builder_message;
+use crate::types::{ExecutionPayload, PayloadAttributes, SignedBidSubmission};
 use anyhow::Result;
-use dashmap::DashMap;
-use ethereum_consensus::primitives::{Hash32, BlsPublicKey};
-use ethereum_consensus::ssz::ByteVector;
-use ethers::abi::Hash;
-use mev_rs::types::{capella, BidTrace, ExecutionPayload, SignedBidSubmission};
-use reqwest::Client;
-use reth_primitives::hex::decode;
-use reth_primitives::{hex, sign_message, Address, Block, U256};
-use reth_transaction_pool::PoolTransaction;
-use serde::Deserialize;
-use ssz_rs::DeserializeError;
-use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::time::Duration;
-use tokio::time::{sleep, timeout};
+use ethereum_consensus::crypto::SecretKey;
+use ethereum_consensus::primitives::{BlsPublicKey, ExecutionAddress, Hash32};
+use mev_rs::types::BidTrace;
+use reth_primitives::{sign_message, Block, U256};
+use ruint::aliases::B384;
 
 // TODO default signing domain (originally in boost-utils, possibly in mev-rs now?)
 
-struct Endpoint {
-    pub url: String,
-    pub alias: String,
-    pub authorization_header: Option<String>,
-    pub disable_gzip: bool,
-    pub secret_key: String, // TODO isn't it used everywhere
-    pub blacklist_file: Option<String>,
-    pub extra_data: String, // TODO what is it?
-}
-
 struct Config {
-    pub endpoints: Vec<Endpoint>,
-    pub endpoints_validator_data: Vec<String>, // TODO: maybe bad name
+    pub endpoints: Vec<RelayEndpoint>,
+    pub builder_public_key: B384,
 }
 
 // TODO: rename
@@ -42,12 +23,13 @@ struct Coordinator {
     last_slot: u64,
     ready_relays: Vec<ReadyRelay>,
     // TODO beacon_client (not real client, redis connection),
-    builder_public_key: B160,
+    builder_public_key: B384,
+    secret_key: SecretKey,
 }
 
 struct ReadyRelay {
-    pub endpoint: &'static RelayEndpoint,
-    pub validator: &'static Validator,
+    pub index: usize,
+    pub validator: Validator,
 }
 
 // TODO:
@@ -58,12 +40,15 @@ impl Coordinator {
     fn get_ready_relays(&self, slot: u64) -> Vec<ReadyRelay> {
         self.all_endpoints
             .iter()
-            .filter_map(|endpoint| match endpoint.get_validators() {
+            .enumerate()
+            .filter_map(|(i, endpoint)| match endpoint.get_validators() {
                 Ok(validators) => {
-                    let validator = validators.iter().find(|&validator| validator.slot == slot);
+                    let validator = validators
+                        .into_iter()
+                        .find(|validator| validator.slot == slot);
                     if validator.is_some() {
                         Some(ReadyRelay {
-                            endpoint,
+                            index: i,
                             validator: validator.unwrap(),
                         })
                     } else {
@@ -94,18 +79,18 @@ impl Coordinator {
     }
 
     fn on_new_block(&self, block: Block, value: U256) {
-        for relay in self.ready_relays {
+        self.ready_relays.iter().for_each(|relay| {
             // TODO may be slow to rebuild it for each relay. Execution payload is always the same
-            let bid: SignedBidSubmission = self.create_bid(relay, block, value).unwrap();
-            relay.endpoint.post_block(&bid);
-        }
+            let bid: SignedBidSubmission = self.create_bid(relay, &block, value).unwrap();
+            self.all_endpoints[relay.index].post_block(&bid);
+        })
     }
 
     // TODO check if all fields are correct
     fn create_bid(
         &self,
-        relay: ReadyRelay,
-        block: Block,
+        relay: &ReadyRelay,
+        block: &Block,
         value: U256,
     ) -> Result<SignedBidSubmission> {
         let block_hash = block.hash_slow();
@@ -114,109 +99,111 @@ impl Coordinator {
 
         let parent_hash = Hash32::try_from(block.parent_hash.as_bytes());
 
+        let pk_bytes: [u8; 48] = self.builder_public_key.to_le_bytes();
+        let pk_slice = &pk_bytes[..];
+
+        let propeser_pk_bytes: [u8; 48] = relay.validator.entry.message.pubkey.to_le_bytes();
+        let proposer_pk_slice = &propeser_pk_bytes[..];
 
         let mut message = BidTrace {
             slot: self.last_slot,
-            parent_hash: parent_hash,
+            parent_hash: Hash32::try_from(block.parent_hash.as_bytes())?,
             block_hash: Hash32::try_from(block_hash.as_bytes())?,
-            builder_public_key: ByteVector::<20>::try_from(self.builder_public_key.as_bytes())?,
-            proposer_public_key: relay.validator.entry.message.pubkey.parse().unwrap(), // TODO convert
-            proposer_fee_recipient: ByteVector::<20>::try_from(relay.validator.entry.message.fee_recipient.as_bytes())?,
+            builder_public_key: BlsPublicKey::try_from(pk_slice)?,
+            proposer_public_key: BlsPublicKey::try_from(proposer_pk_slice)?,
+            proposer_fee_recipient: ExecutionAddress::try_from(
+                relay.validator.entry.message.fee_recipient.as_bytes(),
+            )?,
             gas_limit: block.gas_limit,
             gas_used: block.gas_used,
             value: ssz_rs::U256::from_bytes_le(value.to_le_bytes()),
-        }
+        };
 
-        let execution_payload = capella::ExecutionPayload {
-            parent_hash: parent_hash,
-            fee_recipient: ByteVector::<20>::try_from(block.beneficiary.as_bytes())?,
+        let execution_payload = ExecutionPayload {
+            parent_hash: block.parent_hash,
+            fee_recipient: block.beneficiary,
             state_root: block.state_root,
             receipts_root: block.receipts_root,
-            logs_bloom: ByteVector::<256>::try_from(block.logs_bloom.as_bytes())?,
+            logs_bloom: block.logs_bloom,
             prev_randao: block.mix_hash,
             block_number: block.number,
             gas_limit: block.gas_limit,
             gas_used: block.gas_used,
             timestamp: block.timestamp,
-            extra_data: block.extra_data,
+            extra_data: block.extra_data.clone(), // TODO
             base_fee_per_gas: block.base_fee_per_gas.unwrap().into(),
             block_hash: block_hash,
-            transactions: block.body,
-            withdrawals: block.withdrawals.unwrap(),
+            transactions: block.body.clone(),
+            withdrawals: block.withdrawals.clone().unwrap(),
             // data_gas_used: block.blob_gas_used,
             // excess_data_gas: block.excess_blob_gas,
         };
 
-        let signature = sign_builder_message(message, secret);
-        // pub struct PayloadAttributes {
-        //   pub timestamp: u64,
-        //   pub random: H256,
-        //   pub suggested_fee_receiptient: Address,
-        //   pub withdrawals: Vec<Withdrawal>,
-        //   pub slot: u64,
-        //   pub head_hash: BlockHash,
-        //   pub gas_limit: u64,
-        // }
-        unimplemented!();
+        // TOD:w
+
+        let signature = sign_builder_message(&mut message, &self.secret_key)?;
+
+        return Ok(SignedBidSubmission {
+            message: message,
+            signature: signature,
+            execution_payload: execution_payload,
+        });
     }
 }
 
-fn new_coordinator(config: Config) {
-    let get_validators = config.endpoints_validator_data.iter().map(|&endpoint| {
-        ValidatorGetter {
-            endpoint: endpoint.clone(),
-            alias: endpoint, // TODO to hostname with port
-            // is_validator_sync_ongoing: false,
-            last_requested_slot: 0,
-            slot_to_validator: HashMap::new(),
+#[cfg(test)]
+mod tests {
+    use reth_revm_primitives::new;
+
+    use crate::config::get_relay_endpoints;
+
+    use super::*;
+
+    #[test]
+    fn create_coordinator() {
+        let builder_pk = B384::default();
+        let builder_sk = SecretKey::default();
+
+        let coordinator = Coordinator {
+            all_endpoints: get_relay_endpoints(),
+            last_slot: 0,
+            ready_relays: vec![],
+            builder_public_key: builder_pk,
+            secret_key: builder_sk,
         };
-    });
+    }
 
-    let relay_submitters: Result<Vec<RelaySubmitter>, anyhow::Error> = config
-        .endpoints
-        .iter()
-        .map(|&endpoint| {
-            let mut blacklist = HashSet::new();
+    // #[test]
+    // fn test_get_validator_relay_response() -> Result<(), Box<dyn Error>> {
+    //     let endpoint = setup_endpoint();
+    //     let response: Vec<Validator> = endpoint.get_validators().unwrap();
 
-            match endpoint.blacklist_file {
-                Some(file) => {
-                    let file = fs::read_to_string(&file).map_err(|e| {
-                        anyhow::anyhow!("Failed to read the blacklist file: {:?}", e)
-                    })?;
-                    let _blacklist: Vec<[u8; 20]> = serde_json::from_str(&file).map_err(|e| {
-                        anyhow::anyhow!("Failed to parse the blacklist JSON: {:?}", e)
-                    })?;
-                    for addr in _blacklist.iter() {
-                        blacklist.insert(Address::from_slice(addr));
-                    }
-                }
-                None => {}
-            }
-            // Verify that the alias is to an existing endpoint
-            if !endpoint.alias.is_empty() {
-                let matched = config.endpoints.iter().any(|&e| e.url == endpoint.alias);
-                if !matched {
-                    return Err(anyhow::anyhow!(
-                        "The endpoint alias: {} doesn't match any existing endpoint URL",
-                        endpoint.alias
-                    ));
-                }
-            }
+    //     // Now `response` is a Vec<GetValidatorRelayResponse>
+    //     println!("{:#?}", response);
 
-            // TODO this prob needed from bid trace and stuff
-            // config: RelaySubmitterConfig {
-            //     secret_key: endpoint.secret_key.clone(),
-            //     signing_domain: builder_signing_domain.clone(),
-            // },
+    //     Ok(())
+    // }
 
-            return anyhow::Ok(RelaySubmitter {
-                endpoint: endpoint.url,
-                alias: endpoint.alias,
-                authorization_header: endpoint.authorization_header,
-                disable_gzip: endpoint.disable_gzip,
-                client: Client::new(),
-                blacklist: blacklist,
-            });
-        })
-        .collect();
+    // #[test]
+    // fn test_send_invalid_block() -> Result<(), Box<dyn Error>> {
+    //     let endpoint = setup_endpoint();
+
+    //     let bid: SignedBidSubmission = serde_json::from_str(SEND_BLOCK_REQUEST_EXAMPLE_JSON)?;
+    //     let response = endpoint.post_block(&bid);
+
+    //     let expected_response = SendBlockStatus {
+    //         code: 400,
+    //         message: "submission for past slot".to_string(),
+    //     };
+
+    //     match response {
+    //         Ok(response_body) => {
+    //             println!("{:#?}", response_body);
+    //             assert_eq!(response_body, expected_response);
+    //         }
+    //         Err(e) => panic!("{}", e),
+    //     }
+
+    //     Ok(())
+    // }
 }

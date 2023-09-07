@@ -1,6 +1,9 @@
 use anyhow::{anyhow, Result};
+use ethereum_consensus::primitives::BlsSignature;
+use mev_rs::types::BidTrace;
 use reth_primitives::{
-    Address, BlockHash, Bloom, Bytes, Transaction, TransactionSigned, Withdrawal, H160, H256, U256,
+    Address, BlockHash, Bloom, Bytes, Signature, Transaction, TransactionSigned, Withdrawal, H160,
+    H256, U256,
 };
 use reth_revm_primitives::primitives::ruint::aliases::{B256, B384};
 
@@ -73,6 +76,40 @@ pub mod as_string {
     }
 }
 
+pub mod as_tx {
+    use bytes::BytesMut;
+    use hex;
+    use reth_primitives::{bytes, TransactionSigned};
+    use reth_rlp::{Decodable, Encodable};
+    use serde::de::Deserialize;
+
+    pub fn serialize<S>(data: &TransactionSigned, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut buffer = BytesMut::new();
+        data.encode(&mut buffer);
+        let hex_string = hex::encode(buffer);
+        serializer.serialize_str(&hex_string)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<TransactionSigned, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s: String = <String>::deserialize(deserializer)?;
+        let result = TransactionSigned::decode(&mut &hex::decode(s).unwrap()[..]);
+
+        match result {
+            Ok(tx) => Ok(tx),
+            Err(e) => Err(serde::de::Error::custom(format!(
+                "failed to decode transaction: {}",
+                e
+            ))),
+        }
+    }
+}
+
 pub struct PayloadAttributes {
     pub timestamp: u64,
     pub random: H256,
@@ -113,7 +150,7 @@ pub struct ProposerSchedule {
 }
 
 type BlsPublicKey = B384;
-type BlsSignature = B768;
+// type BlsSignature = B768;
 
 // #[derive(Debug, Default, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
 // pub struct BidTrace {
@@ -135,7 +172,6 @@ type BlsSignature = B768;
 
 // TODO: From ruint, remove when ruint PR merged
 use ruint::{aliases::B160, Bits, Uint};
-use ssz_rs::prelude::SimpleSerialize;
 macro_rules! alias {
     ($($uname:ident $bname:ident ($bits:expr, $limbs:expr);)*) => {$(
         #[doc = concat!("[`Uint`] for `", stringify!($bits),"` bits.")]
@@ -158,40 +194,43 @@ pub const MAX_BYTES_PER_TRANSACTION: usize = 1_073_741_824;
 pub const MAX_TRANSACTIONS_PER_PAYLOAD: usize = 1_048_576;
 pub const MAX_WITHDRAWALS_PER_PAYLOAD: usize = 16;
 
-// // It is deneb
-// #[derive(Default, Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-// pub struct ExecutionPayload {
-//     pub parent_hash: BlockHash,
-//     pub fee_recipient: Address,
-//     pub state_root: Bytes32,
-//     pub receipts_root: Bytes32,
-//     pub logs_bloom: Bloom,
-//     pub prev_randao: Bytes32,
-//     #[serde(with = "as_string")]
-//     pub block_number: u64,
-//     #[serde(with = "as_string")]
-//     pub gas_limit: u64,
-//     #[serde(with = "as_string")]
-//     pub gas_used: u64,
-//     #[serde(with = "as_string")]
-//     pub timestamp: u64,
-//     pub extra_data: Bytes, // TODO: should never be more that MAX_EXTRA_DATA_BYTES
-//     #[serde(with = "as_string")]
-//     pub base_fee_per_gas: u64,
-//     pub block_hash: BlockHash,
-//     pub transactions: Vec<TransactionSigned>,
-//     pub withdrawals: Vec<Withdrawal>,
-//     // deben stuff
-//     // #[serde(with = "as_string")]
-//     // pub data_gas_used: u64,
-//     // #[serde(with = "as_string")]
-//     // pub excess_data_gas: u64,
-// }
+// It is deneb
+#[derive(Default, Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ExecutionPayload {
+    pub parent_hash: BlockHash,
+    pub fee_recipient: Address,
+    pub state_root: Bytes32,
+    pub receipts_root: Bytes32,
+    pub logs_bloom: Bloom,
+    pub prev_randao: Bytes32,
+    #[serde(with = "as_string")]
+    pub block_number: u64,
+    #[serde(with = "as_string")]
+    pub gas_limit: u64,
+    #[serde(with = "as_string")]
+    pub gas_used: u64,
+    #[serde(with = "as_string")]
+    pub timestamp: u64,
+    pub extra_data: Bytes, // TODO: should never be more that MAX_EXTRA_DATA_BYTES
+    #[serde(with = "as_string")]
+    pub base_fee_per_gas: u64,
+    pub block_hash: BlockHash,
+    #[serde(with = "as_tx")]
+    pub transactions: Vec<TransactionSigned>,
+    pub withdrawals: Vec<Withdrawal>,
+    // deneb stuff
+    // #[serde(with = "as_string")]
+    // pub data_gas_used: u64,
+    // #[serde(with = "as_string")]
+    // pub excess_data_gas: u64,
+}
 
-// #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
-// pub struct SignedBidSubmission {
-//     pub message: BidTrace,
-//     // TODO: support multiple forks
-//     pub execution_payload: ExecutionPayload,
-//     pub signature: BlsSignature,
-// }
+// This is a Frankensteined version of the SignedBidSubmission from mev-rs.
+// TODO: drop mev-rs dependency
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SignedBidSubmission {
+    pub message: BidTrace,
+    // TODO: support multiple forks (deneb etc.)
+    pub execution_payload: ExecutionPayload,
+    pub signature: BlsSignature,
+}
