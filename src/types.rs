@@ -1,9 +1,11 @@
+use core::fmt;
+
 use anyhow::{anyhow, Result};
 use ethereum_consensus::primitives::BlsSignature;
 use mev_rs::types::BidTrace;
 use reth_primitives::{
-    Address, BlockHash, Bloom, Bytes, Signature, Transaction, TransactionSigned, Withdrawal, H160,
-    H256, U256,
+    bytes::BytesMut, Address, BlockHash, Bloom, Bytes, Signature, Transaction, TransactionSigned,
+    TxHash, Withdrawal, H160, H256, U256,
 };
 use reth_revm_primitives::primitives::ruint::aliases::{B256, B384};
 
@@ -110,6 +112,51 @@ pub mod as_tx {
     }
 }
 
+impl Serialize for TransactionVec {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let TransactionVec(vec) = self;
+
+        let mut seq = serializer.serialize_seq(Some(vec.len()))?;
+        for e in vec {
+            seq.serialize_element(e)?;
+        }
+        seq.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for TransactionVec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct TransactionVecVisitor;
+
+        impl<'de> Visitor<'de> for TransactionVecVisitor {
+            type Value = TransactionVec;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a sequence of TransactionSigned")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<TransactionVec, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut vec = Vec::new();
+                while let Some(value) = seq.next_element()? {
+                    vec.push(value);
+                }
+                Ok(TransactionVec(vec))
+            }
+        }
+
+        deserializer.deserialize_seq(TransactionVecVisitor)
+    }
+}
+
 pub struct PayloadAttributes {
     pub timestamp: u64,
     pub random: H256,
@@ -170,8 +217,14 @@ type BlsPublicKey = B384;
 //     pub value: U256,
 // }
 
+use reth_rlp::Encodable;
 // TODO: From ruint, remove when ruint PR merged
 use ruint::{aliases::B160, Bits, Uint};
+use serde::{
+    de::{SeqAccess, Visitor},
+    ser::SerializeSeq,
+    Deserialize, Deserializer, Serialize, Serializer,
+};
 macro_rules! alias {
     ($($uname:ident $bname:ident ($bits:expr, $limbs:expr);)*) => {$(
         #[doc = concat!("[`Uint`] for `", stringify!($bits),"` bits.")]
@@ -185,8 +238,6 @@ alias! {
     U768 B768 (768, 12);
 }
 
-type Bytes32 = H256;
-
 // From alexstokes' ethereum-consensus
 pub const BYTES_PER_LOGS_BLOOM: usize = 256;
 pub const MAX_EXTRA_DATA_BYTES: usize = 32;
@@ -194,15 +245,50 @@ pub const MAX_BYTES_PER_TRANSACTION: usize = 1_073_741_824;
 pub const MAX_TRANSACTIONS_PER_PAYLOAD: usize = 1_048_576;
 pub const MAX_WITHDRAWALS_PER_PAYLOAD: usize = 16;
 
+// To redefine serialization/deserialization, a bit hacky
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TransactionVec(pub Vec<TransactionSigned>);
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WithdrawalVec(pub Vec<Withdrawal>);
+
+// Withdrawals from reth are [de]serialized in a different format
+#[derive(Debug, Clone, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
+pub struct WithdrawalMevBoost {
+    #[serde(with = "as_string")]
+    pub index: u64,
+    #[serde(with = "as_string")]
+    pub validator_index: u64,
+    pub address: Address,
+    #[serde(with = "as_string")]
+    pub amount: u64,
+}
+
+impl From<Withdrawal> for WithdrawalMevBoost {
+    fn from(w: Withdrawal) -> Self {
+        WithdrawalMevBoost {
+            index: w.index,
+            validator_index: w.validator_index,
+            address: w.address,
+            amount: w.amount,
+        }
+    }
+}
+
+pub fn tx_signed_to_bytes(tx: TransactionSigned) -> reth_primitives::Bytes {
+    let mut encoded = BytesMut::new();
+    tx.encode(&mut encoded);
+    reth_primitives::Bytes::from(&encoded[..])
+}
+
 // It is deneb
 #[derive(Default, Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExecutionPayload {
     pub parent_hash: BlockHash,
     pub fee_recipient: Address,
-    pub state_root: Bytes32,
-    pub receipts_root: Bytes32,
+    pub state_root: H256,
+    pub receipts_root: H256,
     pub logs_bloom: Bloom,
-    pub prev_randao: Bytes32,
+    pub prev_randao: H256,
     #[serde(with = "as_string")]
     pub block_number: u64,
     #[serde(with = "as_string")]
@@ -215,9 +301,8 @@ pub struct ExecutionPayload {
     #[serde(with = "as_string")]
     pub base_fee_per_gas: u64,
     pub block_hash: BlockHash,
-    #[serde(with = "as_tx")]
-    pub transactions: Vec<TransactionSigned>,
-    pub withdrawals: Vec<Withdrawal>,
+    pub transactions: Vec<reth_primitives::Bytes>,
+    pub withdrawals: Vec<WithdrawalMevBoost>,
     // deneb stuff
     // #[serde(with = "as_string")]
     // pub data_gas_used: u64,

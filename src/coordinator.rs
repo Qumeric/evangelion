@@ -1,6 +1,9 @@
 use crate::relay_endpoint::{RelayEndpoint, Validator};
 use crate::signing::sign_builder_message;
-use crate::types::{ExecutionPayload, PayloadAttributes, SignedBidSubmission};
+use crate::types::{
+    tx_signed_to_bytes, ExecutionPayload, PayloadAttributes, SignedBidSubmission,
+    WithdrawalMevBoost,
+};
 use anyhow::Result;
 use ethereum_consensus::crypto::SecretKey;
 use ethereum_consensus::primitives::{BlsPublicKey, ExecutionAddress, Hash32};
@@ -133,13 +136,24 @@ impl Coordinator {
             extra_data: block.extra_data.clone(), // TODO
             base_fee_per_gas: block.base_fee_per_gas.unwrap().into(),
             block_hash: block_hash,
-            transactions: block.body.clone(),
-            withdrawals: block.withdrawals.clone().unwrap(),
+            transactions: block
+                .body
+                .clone()
+                .into_iter()
+                .map(tx_signed_to_bytes)
+                .collect(),
+            withdrawals: block
+                .withdrawals
+                .clone()
+                .unwrap()
+                .into_iter()
+                .map(WithdrawalMevBoost::from)
+                .collect(),
             // data_gas_used: block.blob_gas_used,
             // excess_data_gas: block.excess_blob_gas,
         };
 
-        // TOD:w
+        // TODO ???
 
         let signature = sign_builder_message(&mut message, &self.secret_key)?;
 

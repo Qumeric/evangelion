@@ -1,7 +1,6 @@
 use crate::types::as_string;
 use crate::types::SignedBidSubmission;
 use anyhow::{Context, Result};
-use ethereum_consensus::primitives::BlsPublicKey;
 use flate2::{write::GzEncoder, Compression};
 use reqwest::header;
 use reth_primitives::{hex, Address};
@@ -125,7 +124,13 @@ impl RelayEndpoint {
 
 #[cfg(test)]
 mod tests {
-    use crate::mev_boost_relay_json::SEND_BLOCK_REQUEST_EXAMPLE_JSON;
+    use reth_primitives::{BlockHash, Bloom, TransactionSigned, Withdrawal};
+    use reth_rlp::Decodable;
+
+    use crate::{
+        mev_boost_relay_json::SEND_BLOCK_REQUEST_EXAMPLE_JSON,
+        types::{tx_signed_to_bytes, ExecutionPayload, WithdrawalMevBoost},
+    };
 
     use super::*;
 
@@ -134,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_validator_relay_response() -> Result<(), Box<dyn Error>> {
+    fn get_validator_relay_response() -> Result<(), Box<dyn Error>> {
         let endpoint = setup_endpoint();
         let response: Vec<Validator> = endpoint.get_validators().unwrap();
 
@@ -145,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn test_send_invalid_block() -> Result<(), Box<dyn Error>> {
+    fn send_invalid_block() -> Result<()> {
         let endpoint = setup_endpoint();
 
         let bid: SignedBidSubmission = serde_json::from_str(SEND_BLOCK_REQUEST_EXAMPLE_JSON)?;
@@ -163,6 +168,53 @@ mod tests {
             }
             Err(e) => panic!("{}", e),
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_execution_payload() -> Result<()> {
+        let execution_payload = ExecutionPayload {
+            parent_hash: BlockHash::default(),
+            fee_recipient: Address::default(),
+            state_root: reth_primitives::H256::default(),
+            receipts_root: reth_primitives::H256::default(),
+            logs_bloom: Bloom::default(),
+            prev_randao: reth_primitives::H256::default(),
+            block_number: 1,
+            gas_limit: 1,
+            gas_used: 1,
+            timestamp: 1,
+            extra_data: reth_primitives::Bytes::from("1337".as_bytes()),
+            base_fee_per_gas: 1,
+            block_hash: BlockHash::default(),
+            transactions: vec![tx_signed_to_bytes(TransactionSigned {
+                hash: reth_primitives::H256::default(),
+                signature: reth_primitives::Signature::default(),
+                transaction: reth_primitives::Transaction::default(),
+            })],
+            withdrawals: vec![WithdrawalMevBoost {
+                index: 1,
+                validator_index: 1,
+                address: Address::default(),
+                amount: 1,
+            }],
+        };
+
+        let serialized = serde_json::to_string_pretty(&execution_payload)?;
+        println!("{}", serialized);
+
+        Ok(())
+    }
+
+    #[test]
+    fn encode_mevboost_tx() -> Result<()> {
+        let mut bytes = hex::decode("02f878831469668303f51d843b9ac9f9843b9aca0082520894c93269b73096998db66be0441e836d873535cb9c8894a19041886f000080c001a031cc29234036afbf9a1fb9476b463367cb1f957ac0b919b69bbc798436e604aaa018c4e9c3914eb27aadd0b91e10b18655739fcf8c1fc398763a9f1beecb8ddc86")?;
+        let mut slice: &[u8] = &bytes;
+
+        let tx = TransactionSigned::decode(&mut slice);
+
+        println!("{:#?}", tx);
 
         Ok(())
     }
